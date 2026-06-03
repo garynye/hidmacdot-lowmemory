@@ -1,0 +1,71 @@
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Build outputs
+Debug/
+Release/
+x64/
+build/
+out/
+tmp/
+
+# Visual Studio folders
+.vs/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.vcxproj.user
+*.psess
+*.vspx
+*.vsp
+*.psess
+
+# Compiled binaries and generated objects
+*.obj
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.tds
+*.idb
+*.ipch
+*.pch
+*.iobj
+*.ipdb
+*.class
+*.exp
+*.res
+
+# Database files
+*.sdf
+*.opensdf
+
+# Database lock files
+*.db
+*.VC.db
+*.VC.VC.opendb
+
+# Logs and temp files
+*.log
+*.tmp
+*.cache
+*.pid
+*.seed
+*.pid.lock
+
+# Visual Studio generated folders/files
+Bin/
+Obj/
+*.bsc
+*.tlh
+*.tli
+*.ncb
+*.sbr
+*.plg
