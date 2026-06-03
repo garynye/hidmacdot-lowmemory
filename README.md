@@ -5,8 +5,8 @@ Native Win32 utility that hides the orange privacy dot used by Jump Desktop with
 ## What it does
 
 - Creates a tiny topmost Win32 overlay window.
-- Tracks foreground-window changes using `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` (no polling).
-- Shows the overlay when Jump Desktop is in the foreground (configurable process list), or when calibration mode is enabled.
+- Tracks foreground-window changes using `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` and refreshes visibility every 2 seconds.
+- Shows the overlay according to `visibilityMode` (default: `TargetFullscreenWindow`) for target windows on the selected monitor, or when calibration mode is enabled.
 - Supports global hotkeys for live nudge-based calibration.
 - Persists nudge offsets to `%AppData%\DotHiderNative\settings.ini`.
 - Stores a native tray icon menu for quick control.
@@ -56,20 +56,35 @@ Both locations use default values on first launch.
 
 - monitor=primary
 - anchor=TopRight
-- shape=Ellipse
+- shape=Rectangle
 - color=Black
-- width=7
-- height=7
+- width=9
+- height=9
 - topInset=2
-- rightInset=3
+- rightInset=2
 - scaleLogicalSettings=true
 - targetProcesses=JumpDesktop,JumpClient
+- visibilityMode=TargetFullscreenWindow
+- fullscreenTolerancePx=8
 - calibrationMode=false
+- persistCalibrationMode=false
 - showOnlyWhenTargetForeground=true
 - smallStep=1
 - largeStep=10
 - enableHotkeys=true
 - enableMemoryLogging=false
+
+## Visibility behavior
+
+- `TargetFullscreenWindow` (default): show overlay when any visible top-level target process window covers the selected monitor as a full-screen window.
+- `ForegroundTarget`: show overlay only when a target process is the foreground process.
+- `Always`: always show overlay when calibration mode is off.
+
+Recommended behavior:
+
+- Use `TargetFullscreenWindow` for normal use.
+- Use Calibration Mode only for manual positioning.
+- Turn Calibration Mode off after adjustment.
 
 ## Keyboard controls
 

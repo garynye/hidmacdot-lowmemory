@@ -16,6 +16,12 @@
 
 namespace {
 
+enum class VisibilityMode {
+    ForegroundTarget,
+    TargetFullscreenWindow,
+    Always,
+};
+
 constexpr wchar_t kAppName[] = L"DotHiderNative";
 constexpr wchar_t kWindowClass[] = L"DotHiderNativeOverlay";
 constexpr wchar_t kSettingsDir[] = L"DotHiderNative";
@@ -38,20 +44,25 @@ constexpr int kHotkeyToggleCalibration = 50009;
 constexpr int kHotkeyReload = 50010;
 constexpr UINT kTrayIconMessage = WM_APP + 10;
 constexpr UINT kForegroundUpdateMessage = WM_APP + 11;
+constexpr UINT_PTR kVisibilityRefreshTimerId = 1;
+constexpr UINT kVisibilityRefreshIntervalMs = 2000;
 
 struct AppSettings {
     std::wstring monitor = L"primary";
     std::wstring anchor = L"TopRight";
-    std::wstring shape = L"Ellipse";
+    std::wstring shape = L"Rectangle";
     COLORREF color = RGB(0, 0, 0);
-    int width = 7;
-    int height = 7;
+    int width = 9;
+    int height = 9;
     int topInset = 2;
-    int rightInset = 3;
+    int rightInset = 2;
     bool scaleLogicalSettings = true;
 
     std::vector<std::wstring> targetProcesses = {L"jumpdesktop", L"jumpclient"};
+    VisibilityMode visibilityMode = VisibilityMode::TargetFullscreenWindow;
+    int fullscreenTolerancePx = 8;
     bool calibrationMode = false;
+    bool persistCalibrationMode = false;
     bool showOnlyWhenTargetForeground = true;
 
     bool enableHotkeys = true;
@@ -93,7 +104,6 @@ HWND g_hwnd = nullptr;
 HWINEVENTHOOK g_foregroundHook = nullptr;
 NOTIFYICONDATAW g_trayData{};
 bool g_trayInstalled = false;
-bool g_isTargetForeground = false;
 Geometry g_geometry;
 MonitorInfo g_activeMonitor;
 UINT g_dpiX = 96;
@@ -322,6 +332,32 @@ std::vector<std::wstring> ParseTargetProcesses(const std::wstring& raw) {
     return result;
 }
 
+VisibilityMode ParseVisibilityMode(const std::wstring& raw, bool showOnlyWhenTargetForegroundFallback) {
+    const std::wstring mode = ToLower(Trim(raw));
+    if (mode.empty()) {
+        return showOnlyWhenTargetForegroundFallback ? VisibilityMode::TargetFullscreenWindow : VisibilityMode::Always;
+    }
+
+    if (mode == L"foregroundtarget") return VisibilityMode::ForegroundTarget;
+    if (mode == L"targetfullscreenwindow") return VisibilityMode::TargetFullscreenWindow;
+    if (mode == L"always") return VisibilityMode::Always;
+
+    return showOnlyWhenTargetForegroundFallback ? VisibilityMode::TargetFullscreenWindow : VisibilityMode::Always;
+}
+
+const wchar_t* VisibilityModeToString(VisibilityMode mode) {
+    switch (mode) {
+        case VisibilityMode::ForegroundTarget:
+            return L"ForegroundTarget";
+        case VisibilityMode::TargetFullscreenWindow:
+            return L"TargetFullscreenWindow";
+        case VisibilityMode::Always:
+            return L"Always";
+        default:
+            return L"TargetFullscreenWindow";
+    }
+}
+
 COLORREF ParseColor(const std::wstring& color) {
     if (ToLower(color) == L"black") return RGB(0, 0, 0);
     if (ToLower(color) == L"white") return RGB(255, 255, 255);
@@ -361,17 +397,20 @@ void EnsureSettingsFile() {
         "[Overlay]\r\n"
         "monitor=primary\r\n"
         "anchor=TopRight\r\n"
-        "shape=Ellipse\r\n"
+        "shape=Rectangle\r\n"
         "color=Black\r\n"
-        "width=7\r\n"
-        "height=7\r\n"
+        "width=9\r\n"
+        "height=9\r\n"
         "topInset=2\r\n"
-        "rightInset=3\r\n"
+        "rightInset=2\r\n"
         "scaleLogicalSettings=true\r\n"
         "\r\n"
         "[Behavior]\r\n"
         "targetProcesses=JumpDesktop,JumpClient\r\n"
+        "visibilityMode=TargetFullscreenWindow\r\n"
+        "fullscreenTolerancePx=8\r\n"
         "calibrationMode=false\r\n"
+        "persistCalibrationMode=false\r\n"
         "showOnlyWhenTargetForeground=true\r\n"
         "\r\n"
         "[Hotkeys]\r\n"
@@ -401,8 +440,17 @@ void LoadSettings() {
     g_settings.scaleLogicalSettings = ReadProfileBool(L"Overlay", L"scaleLogicalSettings", g_settings.scaleLogicalSettings);
 
     g_settings.targetProcesses = ParseTargetProcesses(ReadProfileValue(L"Behavior", L"targetProcesses", L"JumpDesktop,JumpClient"));
+    g_settings.fullscreenTolerancePx = ReadProfileInt(L"Behavior", L"fullscreenTolerancePx", g_settings.fullscreenTolerancePx);
     g_settings.calibrationMode = ReadProfileBool(L"Behavior", L"calibrationMode", g_settings.calibrationMode);
+    g_settings.persistCalibrationMode = ReadProfileBool(L"Behavior", L"persistCalibrationMode", g_settings.persistCalibrationMode);
     g_settings.showOnlyWhenTargetForeground = ReadProfileBool(L"Behavior", L"showOnlyWhenTargetForeground", g_settings.showOnlyWhenTargetForeground);
+    g_settings.visibilityMode = ParseVisibilityMode(
+        ReadProfileValue(L"Behavior", L"visibilityMode", L""),
+        g_settings.showOnlyWhenTargetForeground);
+
+    if (!g_settings.persistCalibrationMode) {
+        g_settings.calibrationMode = false;
+    }
 
     g_settings.enableHotkeys = ReadProfileBool(L"Hotkeys", L"enableHotkeys", g_settings.enableHotkeys);
     g_settings.smallStep = ReadProfileInt(L"Hotkeys", L"smallStep", g_settings.smallStep);
@@ -414,6 +462,7 @@ void LoadSettings() {
     if (g_settings.height <= 0) g_settings.height = 1;
     if (g_settings.topInset < 0) g_settings.topInset = 0;
     if (g_settings.rightInset < 0) g_settings.rightInset = 0;
+    if (g_settings.fullscreenTolerancePx < 0) g_settings.fullscreenTolerancePx = 0;
     if (g_settings.smallStep < 1) g_settings.smallStep = 1;
     if (g_settings.largeStep < 1) g_settings.largeStep = 10;
 }
@@ -565,15 +614,11 @@ bool IsProcessMatchTarget(const std::wstring& exeName) {
     return false;
 }
 
-std::wstring QueryForegroundExecutable() {
-    HWND fg = GetForegroundWindow();
-    if (!fg) return {};
-    DWORD pid = 0;
-    GetWindowThreadProcessId(fg, &pid);
+std::wstring QueryProcessExecutableByPid(DWORD pid) {
     if (pid == 0) return {};
     HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (!proc) {
-        Logf(L"process access denied for foreground pid=%lu", pid);
+        Logf(L"process access denied for pid=%lu", pid);
         return {};
     }
 
@@ -595,10 +640,125 @@ std::wstring QueryForegroundExecutable() {
     return ToLower(exe);
 }
 
+bool IsTargetProcessPid(DWORD pid) {
+    const std::wstring exe = QueryProcessExecutableByPid(pid);
+    if (exe.empty()) return false;
+    return IsProcessMatchTarget(exe);
+}
+
+std::wstring QueryForegroundExecutable() {
+    HWND fg = GetForegroundWindow();
+    if (!fg) return {};
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    return QueryProcessExecutableByPid(pid);
+}
+
+bool IsWindowCloaked(HWND hwnd) {
+    using DwmGetWindowAttributeFn = HRESULT(WINAPI*)(HWND, DWORD, PVOID, DWORD);
+    constexpr DWORD DWMWA_CLOAKED = 14;
+
+    static DwmGetWindowAttributeFn fn = nullptr;
+    static bool initialized = false;
+    if (!initialized) {
+        HMODULE module = GetModuleHandleW(L"dwmapi.dll");
+        if (!module) {
+            module = LoadLibraryW(L"dwmapi.dll");
+        }
+        if (module) {
+            fn = reinterpret_cast<DwmGetWindowAttributeFn>(GetProcAddress(module, "DwmGetWindowAttribute"));
+        }
+        initialized = true;
+    }
+
+    if (!fn) return false;
+
+    DWORD cloaked = 0;
+    return SUCCEEDED(fn(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0;
+}
+
+bool IsTargetTopLevelVisibleWindow(HWND hwnd) {
+    if (!hwnd || hwnd == g_hwnd) return false;
+    if (!IsWindowVisible(hwnd)) return false;
+    if (IsIconic(hwnd)) return false;
+    if (IsWindowCloaked(hwnd)) return false;
+    return true;
+}
+
+bool DoesWindowCoverSelectedMonitor(HWND hwnd) {
+    if (!hwnd) return false;
+    RECT rect{};
+    if (!GetWindowRect(hwnd, &rect)) return false;
+
+    const int tolerance = g_settings.fullscreenTolerancePx;
+    return rect.left <= (g_activeMonitor.bounds.left + tolerance)
+        && rect.top <= (g_activeMonitor.bounds.top + tolerance)
+        && rect.right >= (g_activeMonitor.bounds.right - tolerance)
+        && rect.bottom >= (g_activeMonitor.bounds.bottom - tolerance);
+}
+
+bool HasTargetFullscreenWindowOnSelectedMonitor() {
+    if (g_settings.targetProcesses.empty()) return false;
+
+    struct SearchState {
+        bool found = false;
+        DWORD matchingPid = 0;
+        HWND matchingWindow = nullptr;
+    } state;
+
+    auto callback = [](HWND hwnd, LPARAM lParam) -> BOOL {
+        SearchState* searchState = reinterpret_cast<SearchState*>(lParam);
+        if (!searchState || searchState->found) return FALSE;
+
+        if (!IsTargetTopLevelVisibleWindow(hwnd)) return TRUE;
+
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (!IsTargetProcessPid(pid)) return TRUE;
+
+        if (!DoesWindowCoverSelectedMonitor(hwnd)) return TRUE;
+
+        searchState->found = true;
+        searchState->matchingPid = pid;
+        searchState->matchingWindow = hwnd;
+        return FALSE;
+    };
+
+    EnumWindows(callback, reinterpret_cast<LPARAM>(&state));
+
+    if (state.found && g_settings.enableMemoryLogging) {
+        std::wstring exe = QueryProcessExecutableByPid(state.matchingPid);
+        Logf(L"fullscreen target hit pid=%lu exe=%s hwnd=%p", state.matchingPid, exe.c_str(), state.matchingWindow);
+    }
+
+    return state.found;
+}
+
 bool IsTargetForegroundProcess() {
     const std::wstring exe = QueryForegroundExecutable();
     if (exe.empty()) return false;
     return IsProcessMatchTarget(exe);
+}
+
+void RefreshVisibilityState() {
+    bool targetMatch = false;
+
+    if (g_settings.calibrationMode) {
+        targetMatch = true;
+    } else if (g_settings.visibilityMode == VisibilityMode::Always) {
+        targetMatch = true;
+    } else if (g_settings.visibilityMode == VisibilityMode::ForegroundTarget) {
+        targetMatch = IsTargetForegroundProcess();
+    } else {
+        targetMatch = HasTargetFullscreenWindowOnSelectedMonitor();
+    }
+
+    Logf(L"visibility check mode=%s targetMatch=%s calibration=%s",
+         VisibilityModeToString(g_settings.visibilityMode),
+         targetMatch ? L"true" : L"false",
+         g_settings.calibrationMode ? L"true" : L"false");
+
+    ShowOrHideOverlay(targetMatch);
 }
 
 void ApplyOverlayShape() {
@@ -672,33 +832,22 @@ void ShowOrHideOverlay(bool show) {
     }
 }
 
-void RefreshForegroundState() {
-    bool matched = g_settings.showOnlyWhenTargetForeground ? IsTargetForegroundProcess() : true;
-    g_isTargetForeground = matched;
-    Logf(L"foreground target matched=%s", matched ? L"true" : L"false");
-
-    bool shouldShow = g_settings.calibrationMode || !g_settings.showOnlyWhenTargetForeground || matched;
-    ShowOrHideOverlay(shouldShow);
-}
-
 void RegisterOrUpdateHotkeys();
 
 void PersistAndReposition() {
     UpdateMonitorAndScale();
     ApplyOverlayPlacement();
-    if (g_settings.calibrationMode || !g_settings.showOnlyWhenTargetForeground) {
-        ShowOrHideOverlay(true);
-    } else {
-        RefreshForegroundState();
-    }
+    RefreshVisibilityState();
 }
 
 void SetCalibrationMode(bool enable) {
     if (g_settings.calibrationMode == enable) return;
     g_settings.calibrationMode = enable;
-    PersistCalibrationMode();
+    if (g_settings.persistCalibrationMode) {
+        PersistCalibrationMode();
+    }
     Logf(L"calibration mode=%s", enable ? L"true" : L"false");
-    RefreshForegroundState();
+    RefreshVisibilityState();
 }
 
 void NudgeBy(int dxLogical, int dyLogical) {
@@ -772,7 +921,10 @@ void ShowTrayMenu(HWND hwnd) {
 void OpenSettingsFile() {
     EnsureSettingsFile();
     std::wstring quoted = L"\"" + g_settingsPath + L"\"";
-    ShellExecuteW(nullptr, L"open", L"notepad++.exe", quoted.c_str(), nullptr, SW_SHOWNORMAL);
+    HINSTANCE result = ShellExecuteW(nullptr, L"open", L"notepad++.exe", quoted.c_str(), nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(result) <= 32) {
+        ShellExecuteW(nullptr, L"open", L"notepad.exe", quoted.c_str(), nullptr, SW_SHOWNORMAL);
+    }
 }
 
 void ShowDiagnosticsSnapshot() {
@@ -813,7 +965,6 @@ void LoadAndApplySettings() {
     UpdateMonitorAndScale();
     RegisterOrUpdateHotkeys();
     PersistAndReposition();
-    RefreshForegroundState();
 }
 
 void CALLBACK ForegroundChangeHookProc(
@@ -882,7 +1033,12 @@ LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             return 0;
         }
         case kForegroundUpdateMessage:
-            RefreshForegroundState();
+            RefreshVisibilityState();
+            return 0;
+        case WM_TIMER:
+            if (wParam == kVisibilityRefreshTimerId) {
+                RefreshVisibilityState();
+            }
             return 0;
         case WM_HOTKEY: {
             if (!g_settings.enableHotkeys) return 0;
@@ -947,6 +1103,7 @@ LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                            kHotkeyToggleCalibration, kHotkeyReload }) {
                 UnregisterHotKey(hwnd, id);
             }
+            KillTimer(hwnd, kVisibilityRefreshTimerId);
             if (g_foregroundHook) {
                 UnhookWinEvent(g_foregroundHook);
                 g_foregroundHook = nullptr;
@@ -1016,6 +1173,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     CreateTrayIcon();
 
     RegisterOrUpdateHotkeys();
+    SetTimer(g_hwnd, kVisibilityRefreshTimerId, kVisibilityRefreshIntervalMs, nullptr);
     g_foregroundHook = SetWinEventHook(
         EVENT_SYSTEM_FOREGROUND,
         EVENT_SYSTEM_FOREGROUND,
@@ -1024,12 +1182,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
         0,
         0,
         WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-    // SetWinEventHook is used instead of polling timers to keep CPU and wakeups low.
-    if (g_foregroundHook) {
-        RefreshForegroundState();
-    } else {
-        ShowOrHideOverlay(g_settings.calibrationMode || !g_settings.showOnlyWhenTargetForeground);
-    }
+    RefreshVisibilityState();
 
     LogMemorySnapshot(L"after initialization");
 
