@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "tray_icon.h"
+
 namespace {
 
 enum class VisibilityMode {
@@ -979,18 +981,29 @@ void CALLBACK ForegroundChangeHookProc(
 void CreateTrayIcon() {
     if (g_trayInstalled) return;
 
+    HICON trayIcon = tray_icon::Create(g_instance);
+    const bool ownsTrayIcon = trayIcon != nullptr;
+    if (!trayIcon) {
+        trayIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    }
+
     std::memset(&g_trayData, 0, sizeof(g_trayData));
     g_trayData.cbSize = sizeof(g_trayData);
     g_trayData.hWnd = g_hwnd;
     g_trayData.uID = 1;
     g_trayData.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     g_trayData.uCallbackMessage = kTrayIconMessage;
-    g_trayData.hIcon = LoadIconW(nullptr, IDI_INFORMATION);
+    g_trayData.hIcon = trayIcon;
     wcsncpy_s(g_trayData.szTip, L"DotHiderNative", _TRUNCATE);
 
     if (Shell_NotifyIconW(NIM_ADD, &g_trayData)) {
         g_trayInstalled = true;
         Logf(L"tray icon created");
+    }
+
+    if (ownsTrayIcon) {
+        DestroyIcon(trayIcon);
+        g_trayData.hIcon = nullptr;
     }
 }
 
