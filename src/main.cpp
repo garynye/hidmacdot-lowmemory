@@ -2,11 +2,8 @@
 // footprint low and startup time small for a tiny background overlay helper.
 
 #include <Windows.h>
-#include <shellapi.h>
-#include <shlobj.h>
 #include <shcore.h>
 #include <psapi.h>
-#include <cstring>
 #include <cwctype>
 #include <cmath>
 #include <cstdarg>
@@ -14,7 +11,10 @@
 #include <string>
 #include <vector>
 
+#include "memory_optimizer.h"
 #include "tray_icon.h"
+#include "windows_input.h"
+#include "windows_shell.h"
 
 namespace {
 
@@ -46,6 +46,7 @@ constexpr int kHotkeyToggleCalibration = 50009;
 constexpr int kHotkeyReload = 50010;
 constexpr UINT kTrayIconMessage = WM_APP + 10;
 constexpr UINT kForegroundUpdateMessage = WM_APP + 11;
+constexpr UINT kTrayIconId = 1;
 constexpr UINT_PTR kVisibilityRefreshTimerId = 1;
 constexpr UINT kVisibilityRefreshIntervalMs = 2000;
 
@@ -104,7 +105,6 @@ AppSettings g_settings;
 HINSTANCE g_instance = nullptr;
 HWND g_hwnd = nullptr;
 HWINEVENTHOOK g_foregroundHook = nullptr;
-NOTIFYICONDATAW g_trayData{};
 bool g_trayInstalled = false;
 Geometry g_geometry;
 MonitorInfo g_activeMonitor;
@@ -145,38 +145,40 @@ bool HasSuffixI(std::wstring value, const std::wstring& suffix) {
     return ToLower(tail) == ToLower(suffix);
 }
 
-std::wstring GetAppDataPath() {
-    DWORD needed = GetEnvironmentVariableW(L"APPDATA", nullptr, 0);
+std::wstring GetEnvironmentPath(const wchar_t* variableName) {
+    DWORD needed = GetEnvironmentVariableW(variableName, nullptr, 0);
     if (needed > 0) {
         std::wstring buffer(needed, L'\0');
-        DWORD got = GetEnvironmentVariableW(L"APPDATA", buffer.data(), needed);
+        DWORD got = GetEnvironmentVariableW(variableName, buffer.data(), needed);
         if (got > 0) {
             buffer.resize(got);
-            if (!buffer.empty() && (buffer.back() == L'\\' || buffer.back() == L'/')) {
+            while (buffer.size() > 1 && (buffer.back() == L'\\' || buffer.back() == L'/')) {
                 buffer.resize(buffer.size() - 1);
             }
             return buffer;
         }
     }
-
-    needed = GetEnvironmentVariableW(L"USERPROFILE", nullptr, 0);
-    if (needed > 0) {
-        std::wstring buffer(needed, L'\0');
-        DWORD got = GetEnvironmentVariableW(L"USERPROFILE", buffer.data(), needed);
-        if (got > 0) {
-            buffer.resize(got);
-            if (!buffer.empty() && (buffer.back() == L'\\' || buffer.back() == L'/')) {
-                buffer.resize(buffer.size() - 1);
-            }
-            return buffer + L"\\AppData\\Roaming";
-        }
-    }
-
-    wchar_t path[MAX_PATH] = {};
-    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, path))) {
-        return std::wstring(path);
-    }
     return {};
+}
+
+std::wstring GetAppDataPath() {
+    std::wstring path = GetEnvironmentPath(L"APPDATA");
+    if (!path.empty()) return path;
+
+    path = GetEnvironmentPath(L"USERPROFILE");
+    if (!path.empty()) return path + L"\\AppData\\Roaming";
+
+    return windows_shell::GetKnownFolderPath(windows_shell::KnownFolder::RoamingAppData);
+}
+
+std::wstring GetLocalAppDataPath() {
+    std::wstring path = GetEnvironmentPath(L"LOCALAPPDATA");
+    if (!path.empty()) return path;
+
+    path = GetEnvironmentPath(L"USERPROFILE");
+    if (!path.empty()) return path + L"\\AppData\\Local";
+
+    return windows_shell::GetKnownFolderPath(windows_shell::KnownFolder::LocalAppData);
 }
 
 std::wstring ComposeSettingsPath() {
@@ -205,10 +207,7 @@ std::wstring ResolveWritableSettingsBase() {
         }
     }
 
-    WCHAR localAppData[MAX_PATH] = {};
-    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, localAppData))) {
-        candidates[2] = std::wstring(localAppData);
-    }
+    candidates[2] = GetLocalAppDataPath();
 
     for (const auto& candidate : candidates) {
         if (candidate.empty()) continue;
@@ -220,11 +219,27 @@ std::wstring ResolveWritableSettingsBase() {
 
 bool EnsureDirectory(const std::wstring& path) {
     if (path.empty()) return false;
-    const DWORD result = SHCreateDirectoryExW(nullptr, path.c_str(), nullptr);
-    if (result == ERROR_SUCCESS || result == ERROR_ALREADY_EXISTS || result == ERROR_FILE_EXISTS) {
-        return true;
+
+    const DWORD existingAttributes = GetFileAttributesW(path.c_str());
+    if (existingAttributes != INVALID_FILE_ATTRIBUTES) {
+        return (existingAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
     }
-    return false;
+
+    const size_t separator = path.find_last_of(L"\\/");
+    if (separator != std::wstring::npos && separator > 0) {
+        std::wstring parent = path.substr(0, separator);
+        if (parent.size() == 2 && parent[1] == L':') {
+            parent.push_back(L'\\');
+        }
+        if (!EnsureDirectory(parent)) return false;
+    }
+
+    if (CreateDirectoryW(path.c_str(), nullptr)) return true;
+    if (GetLastError() != ERROR_ALREADY_EXISTS) return false;
+
+    const DWORD createdAttributes = GetFileAttributesW(path.c_str());
+    return createdAttributes != INVALID_FILE_ATTRIBUTES &&
+        (createdAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
 void EnsureFiles() {
@@ -924,11 +939,7 @@ void ShowTrayMenu(HWND hwnd) {
 
 void OpenSettingsFile() {
     EnsureSettingsFile();
-    std::wstring quoted = L"\"" + g_settingsPath + L"\"";
-    HINSTANCE result = ShellExecuteW(nullptr, L"open", L"notepad++.exe", quoted.c_str(), nullptr, SW_SHOWNORMAL);
-    if (reinterpret_cast<INT_PTR>(result) <= 32) {
-        ShellExecuteW(nullptr, L"open", L"notepad.exe", quoted.c_str(), nullptr, SW_SHOWNORMAL);
-    }
+    windows_shell::OpenSettingsEditor(g_settingsPath);
 }
 
 void ShowDiagnosticsSnapshot() {
@@ -987,29 +998,24 @@ void CreateTrayIcon() {
         trayIcon = LoadIconW(nullptr, IDI_APPLICATION);
     }
 
-    std::memset(&g_trayData, 0, sizeof(g_trayData));
-    g_trayData.cbSize = sizeof(g_trayData);
-    g_trayData.hWnd = g_hwnd;
-    g_trayData.uID = 1;
-    g_trayData.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-    g_trayData.uCallbackMessage = kTrayIconMessage;
-    g_trayData.hIcon = trayIcon;
-    wcsncpy_s(g_trayData.szTip, L"DotHiderNative", _TRUNCATE);
-
-    if (Shell_NotifyIconW(NIM_ADD, &g_trayData)) {
+    if (windows_shell::AddTrayIcon(
+            g_hwnd,
+            kTrayIconId,
+            kTrayIconMessage,
+            trayIcon,
+            L"DotHiderNative")) {
         g_trayInstalled = true;
         Logf(L"tray icon created");
     }
 
     if (ownsTrayIcon) {
         DestroyIcon(trayIcon);
-        g_trayData.hIcon = nullptr;
     }
 }
 
 void DestroyTrayIcon() {
     if (!g_trayInstalled) return;
-    Shell_NotifyIconW(NIM_DELETE, &g_trayData);
+    windows_shell::RemoveTrayIcon(g_hwnd, kTrayIconId);
     g_trayInstalled = false;
 }
 
@@ -1141,6 +1147,7 @@ LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
+    const bool imeDisabled = windows_input::DisableImeForCurrentThread();
     g_instance = hInstance;
     g_settingsBaseDir = ResolveWritableSettingsBase();
     g_settingsPath = ComposeSettingsPath();
@@ -1152,6 +1159,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     LoadSettings();
 
     Logf(L"startup");
+    Logf(L"input services imeDisabled=%s", imeDisabled ? L"true" : L"false");
     LogMemorySnapshot(L"startup");
 
     if (g_settings.enableMemoryLogging) {
@@ -1203,6 +1211,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
         WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     RefreshVisibilityState();
 
+    const bool heapCachesReleased = memory_optimizer::ReleaseIdleHeapCaches();
+    Logf(L"heap cache optimization=%s", heapCachesReleased ? L"true" : L"false");
     LogMemorySnapshot(L"after initialization");
 
     MSG msg{};

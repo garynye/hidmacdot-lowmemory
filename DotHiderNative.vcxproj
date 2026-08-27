@@ -59,7 +59,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>user32.lib;gdi32.lib;shell32.lib;shcore.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;shcore.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
@@ -80,17 +80,23 @@
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>user32.lib;gdi32.lib;shell32.lib;shcore.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;shcore.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\memory_optimizer.cpp" />
     <ClCompile Include="src\tray_icon.cpp" />
+    <ClCompile Include="src\windows_input.cpp" />
+    <ClCompile Include="src\windows_shell.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\memory_optimizer.h" />
     <ClInclude Include="src\resource.h" />
     <ClInclude Include="src\tray_icon.h" />
+    <ClInclude Include="src\windows_input.h" />
+    <ClInclude Include="src\windows_shell.h" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="src\DotHiderNative.ico" />

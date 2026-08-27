@@ -121,3 +121,22 @@ The diagnostics log includes:
 - handle count
 - overlay position/size and current offsets
 - calibration state
+
+## Repeatable memory benchmark
+
+Run the isolated five-launch benchmark from PowerShell:
+
+```powershell
+.\scripts\measure_memory.ps1
+```
+
+The benchmark uses temporary AppData, LocalAppData, and Temp directories, disables
+benchmark-instance hotkeys by default, and removes its temporary data when it
+finishes. It reports private working set as the primary measure, plus private bytes,
+total working set, CPU time, page faults, thread count, and handle count.
+
+To measure another build without replacing the normal Release executable:
+
+```powershell
+.\scripts\measure_memory.ps1 -ExecutablePath .\tmp\candidate\DotHiderNative.exe
+```
