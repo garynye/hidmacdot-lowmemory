@@ -740,6 +740,8 @@ bool IsTargetForegroundProcess() {
     return IsProcessMatchTarget(exe);
 }
 
+void ShowOrHideOverlay(bool show);
+
 void RefreshVisibilityState() {
     bool targetMatch = false;
 
@@ -1034,6 +1036,10 @@ LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         }
         case kForegroundUpdateMessage:
             RefreshVisibilityState();
+            return 0;
+        case WM_DISPLAYCHANGE:
+        case WM_DPICHANGED:
+            PersistAndReposition();
             return 0;
         case WM_TIMER:
             if (wParam == kVisibilityRefreshTimerId) {
