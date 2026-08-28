@@ -1,142 +1,252 @@
 # DotHiderNative
 
-Native Win32 utility that hides the orange privacy dot used by Jump Desktop with a tiny black overlay.
+DotHiderNative is a tiny native Windows utility that covers the orange privacy dot shown by Jump Desktop with a configurable topmost overlay. It runs in the notification area, watches for Jump Desktop full-screen windows, and uses no bundled framework or background service.
 
-## What it does
+## Requirements
 
-- Creates a tiny topmost Win32 overlay window.
-- Tracks foreground-window changes using `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` and refreshes visibility every 2 seconds.
-- Repositions and rescales the overlay when Windows reports display-resolution or per-monitor DPI changes.
-- Shows the overlay according to `visibilityMode` (default: `TargetFullscreenWindow`) for target windows on the selected monitor, or when calibration mode is enabled.
-- Supports global hotkeys for live nudge-based calibration.
-- Persists nudge offsets to `%AppData%\DotHiderNative\settings.ini`.
-- Stores a native tray icon menu for quick control.
+- Windows 10 or Windows 11, x64
+- Jump Desktop for the default automatic visibility behavior
+- No administrator access, installer, or Visual C++ runtime download is required
 
-## Build
+The published executable is currently unsigned. Windows SmartScreen may therefore show a warning even when the file matches the release checksum.
+
+## Download and install
+
+Open the [latest GitHub release](https://github.com/garynye/hidmacdot-lowmemory/releases/latest) and choose either:
+
+- `DotHiderNative-v1.0.0-windows-x64.exe` for the smallest direct download, or
+- `DotHiderNative-v1.0.0-windows-x64.zip` if you also want this README and the license in one package.
+
+For the ZIP package, extract it before running the app. Put `DotHiderNative.exe` in a permanent folder such as `%LOCALAPPDATA%\Programs\DotHiderNative`; the app does not need to live under `Program Files`.
+
+Double-click the executable. DotHiderNative has no main window: a tray icon appears in the Windows notification area. If SmartScreen blocks the first launch, verify the SHA-256 checksum from `SHA256SUMS.txt`, then select **More info** and **Run anyway** only if it matches the GitHub release.
+
+### Start automatically with Windows
+
+1. Press `Win+R`, enter `shell:startup`, and press Enter.
+2. Right-drag `DotHiderNative.exe` into the Startup folder.
+3. Choose **Create shortcuts here**.
+
+Keep the executable in its permanent folder after creating the shortcut.
+
+### Update
+
+1. Right-click the DotHiderNative tray icon and choose **Exit**.
+2. Download the newer release and replace the existing executable.
+3. Start it again. Your settings remain in your Windows profile.
+
+### Uninstall
+
+Exit DotHiderNative, remove its Startup shortcut if you created one, and delete the executable. To remove preferences and diagnostics too, delete `%APPDATA%\DotHiderNative`. If that folder does not exist, check the fallback locations described below.
+
+## Quick start
+
+1. Start `DotHiderNative.exe`.
+2. Open Jump Desktop or Jump Client full screen on the selected monitor.
+3. Confirm that the black overlay covers the orange privacy dot.
+4. If alignment needs adjustment, press `Ctrl+Alt+D`, use the arrow hotkeys, then press `Ctrl+Alt+D` again.
+
+The default `TargetFullscreenWindow` mode keeps the overlay hidden until a visible Jump Desktop or Jump Client window covers the selected monitor.
+
+## Tray menu
+
+Right-click the tray icon to access:
+
+- **Toggle Calibration Mode**: show the overlay so it can be positioned.
+- **Reload Settings**: reload `settings.ini` without restarting.
+- **Open Settings File**: open the active configuration in Notepad++ or Notepad.
+- **Show Diagnostics Snapshot**: display current memory and overlay geometry.
+- **Exit**: close the overlay and remove the tray icon.
+
+## Display resolution, scaling, and calibration
+
+Screen resolution and Windows display scaling are different settings. A 3840x2160 display is often set to 150% or 200% scaling, while a 1920x1080 display is often set to 100%. DotHiderNative uses the selected monitor's effective DPI, not its resolution alone.
+
+With the default `scaleLogicalSettings=true`, `width`, `height`, `topInset`, and `rightInset` are logical values that scale automatically per monitor. The default logical size of 9x9 becomes approximately:
+
+| Windows scaling | Effective DPI | Physical overlay size |
+| --- | ---: | ---: |
+| 100% | 96 | 9x9 px |
+| 125% | 120 | 11x11 px |
+| 150% | 144 | 14x14 px |
+| 200% | 192 | 18x18 px |
+
+This normally means that switching between 4K, 1440p, and 1080p displays requires calibration rather than a separate resolution preset.
+
+### Calibrate on any resolution
+
+1. Right-click the tray icon and select **Toggle Calibration Mode**, or press `Ctrl+Alt+D`.
+2. Use `Ctrl+Alt+Arrow` to move one logical unit at a time.
+3. Use `Ctrl+Alt+Shift+Arrow` to move ten logical units at a time.
+4. If the overlay itself is too large or small, open the settings file and adjust `width` and `height`.
+5. Turn calibration mode off when finished.
+
+Arrow-key changes update `topInset` and `rightInset` immediately in `settings.ini`. With a top-right anchor, Left increases `rightInset`, Right decreases it, Up decreases `topInset`, and Down increases it. Insets cannot go below zero.
+
+### Select another monitor
+
+The default `monitor=primary` follows the Windows primary display. You can instead use a zero-based monitor index such as `monitor=1`, or a Windows display device name such as `monitor=\\.\DISPLAY2`.
+
+To list display device names from PowerShell:
 
 ```powershell
-.\build.ps1
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Screen]::AllScreens | Select-Object DeviceName, Primary, Bounds
 ```
 
-The build script locates MSBuild (via `vswhere` when available) and builds `Release|x64`.
+Device names are more explicit than indexes, whose enumeration order may change. After editing `monitor`, use **Reload Settings** or press `Ctrl+Alt+R`.
 
-## Run
+### Use exact physical pixels
 
-```powershell
-I:\...\x64\Release\DotHiderNative.exe
+Set `scaleLogicalSettings=false` when you want `width`, `height`, and inset values to mean exact physical pixels instead of DPI-scaled logical units. Recalibrate after changing this setting.
+
+DotHiderNative automatically repositions itself when Windows reports a resolution, monitor, or per-monitor DPI change.
+
+## Settings file
+
+On first launch, DotHiderNative creates `DotHiderNative\settings.ini` in the first writable base location, in this order:
+
+1. `%APPDATA%`
+2. `%TEMP%`
+3. `%LOCALAPPDATA%`
+
+The normal location is `%APPDATA%\DotHiderNative\settings.ini`. Use **Open Settings File** from the tray menu to open the exact active file rather than guessing which fallback was selected.
+
+Default configuration:
+
+```ini
+[Overlay]
+monitor=primary
+anchor=TopRight
+shape=Rectangle
+color=Black
+width=9
+height=9
+topInset=2
+rightInset=2
+scaleLogicalSettings=true
+
+[Behavior]
+targetProcesses=JumpDesktop,JumpClient
+visibilityMode=TargetFullscreenWindow
+fullscreenTolerancePx=8
+calibrationMode=false
+persistCalibrationMode=false
+showOnlyWhenTargetForeground=true
+
+[Hotkeys]
+enableHotkeys=true
+smallStep=1
+largeStep=10
+
+[Diagnostics]
+enableMemoryLogging=false
 ```
 
-Start the executable directly. On first run, it creates:
+Supported overlay values:
 
-- `%AppData%\DotHiderNative\settings.ini` (preferred when writable)
-- `%TEMP%\DotHiderNative\settings.ini` (fallback if `%APPDATA%` is not writable)
+- `monitor`: `primary`, a zero-based monitor index, or a device name such as `\\.\DISPLAY2`.
+- `anchor`: currently positions at the selected monitor's top-right corner.
+- `shape`: `Rectangle`, `RoundedRectangle`, or `Circle`.
+- `color`: `Black`, `White`, `Red`, `Green`, or `Blue`.
+- `width`, `height`: positive logical units, or pixels when scaling is disabled.
+- `topInset`, `rightInset`: non-negative offsets from the selected monitor's top-right edge.
+- `scaleLogicalSettings`: apply the selected monitor's effective DPI to size and inset values.
 
-Both locations use default values on first launch.
+### Visibility modes
 
-## Tray behavior
+- `TargetFullscreenWindow` (recommended default): show when any visible top-level target-process window covers the selected monitor within `fullscreenTolerancePx`.
+- `ForegroundTarget`: show only while a target process owns the foreground window.
+- `Always`: show whenever calibration mode is off.
 
-- Tray icon is created on startup and stays available for app control.
-- Right-click the tray icon for:
-  - Toggle Calibration Mode
-  - Reload Settings
-  - Open Settings File
-  - Show Diagnostics Snapshot
-  - Exit
+`targetProcesses` is a comma-separated list of executable names. `.exe` is optional. `showOnlyWhenTargetForeground` remains as compatibility behavior for older settings files that do not specify `visibilityMode`.
 
-## Calibration
-
-1. Enable calibration mode with `Ctrl+Alt+D` (or tray menu).
-2. Move the overlay with arrow hotkeys while calibration is enabled.
-3. Large-step movement uses `Shift`:
-   - `Ctrl+Alt+Shift+Arrow`
-4. Toggle calibration mode off with `Ctrl+Alt+D` when alignment is done.
-
-`topInset` and `rightInset` are written back to `settings.ini` immediately on each nudge.
-
-## Default settings
-
-- monitor=primary
-- anchor=TopRight
-- shape=Rectangle
-- color=Black
-- width=9
-- height=9
-- topInset=2
-- rightInset=2
-- scaleLogicalSettings=true
-- targetProcesses=JumpDesktop,JumpClient
-- visibilityMode=TargetFullscreenWindow
-- fullscreenTolerancePx=8
-- calibrationMode=false
-- persistCalibrationMode=false
-- showOnlyWhenTargetForeground=true
-- smallStep=1
-- largeStep=10
-- enableHotkeys=true
-- enableMemoryLogging=false
-
-## Visibility behavior
-
-- `TargetFullscreenWindow` (default): show overlay when any visible top-level target process window covers the selected monitor as a full-screen window.
-- `ForegroundTarget`: show overlay only when a target process is the foreground process.
-- `Always`: always show overlay when calibration mode is off.
-
-Recommended behavior:
-
-- Use `TargetFullscreenWindow` for normal use.
-- Use Calibration Mode only for manual positioning.
-- Turn Calibration Mode off after adjustment.
+`persistCalibrationMode=false` prevents the app from accidentally starting in calibration mode after a restart.
 
 ## Keyboard controls
 
-- `Ctrl+Alt+Left` move left (small)  
-- `Ctrl+Alt+Right` move right (small)  
-- `Ctrl+Alt+Up` move up (small)  
-- `Ctrl+Alt+Down` move down (small)  
-- `Ctrl+Alt+Shift+Left` move left (large)  
-- `Ctrl+Alt+Shift+Right` move right (large)  
-- `Ctrl+Alt+Shift+Up` move up (large)  
-- `Ctrl+Alt+Shift+Down` move down (large)  
-- `Ctrl+Alt+D` toggle calibration mode  
-- `Ctrl+Alt+R` reload settings
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+Alt+D` | Toggle calibration mode |
+| `Ctrl+Alt+R` | Reload settings |
+| `Ctrl+Alt+Arrow` | Move one configured small step while calibrating |
+| `Ctrl+Alt+Shift+Arrow` | Move one configured large step while calibrating |
 
-When calibration mode is disabled, nudge hotkeys do nothing; `Ctrl+Alt+D` and `Ctrl+Alt+R` remain active.
+Nudge hotkeys do nothing outside calibration mode. Set `enableHotkeys=false` if these global shortcuts conflict with another application.
 
-## Memory measurement
+## Measured memory use
 
-- `enableMemoryLogging` is disabled by default.
-- To enable memory logging:
-  1. Edit `settings.ini` and set `enableMemoryLogging=true`.
-  2. Press `Ctrl+Alt+R` to reload, or restart the app.
-- Inspect the generated diagnostics file:
+The final v1.0.0 Release x64 executable was measured on August 28, 2026, on Windows 11 Pro build 26200 with an Intel Core i5-12600K:
 
-```powershell
-Get-Content $env:TEMP\DotHiderNative\diagnostics.log    # default fallback location
-Get-Content $env:APPDATA\DotHiderNative\diagnostics.log # preferred location
-```
+| Metric | Aggregate result |
+| --- | ---: |
+| Median private working set | 724 KiB (0.71 MiB) |
+| P95 private working set | 772 KiB (0.75 MiB) |
+| Median private bytes | 1,088 KiB (1.06 MiB) |
+| Median total working set | 7,624 KiB (7.45 MiB) |
 
-The diagnostics log includes:
-- working set (MB)
-- private bytes (MB)
-- handle count
-- overlay position/size and current offsets
-- calibration state
+These are measured values, not a memory limit. Results vary with Windows version, display configuration, loaded system components, and activity.
 
-## Repeatable memory benchmark
+Private working set is the primary figure because it approximates resident RAM unique to this process. Total working set also includes Windows DLL pages that can be shared with other processes.
 
-Run the isolated five-launch benchmark from PowerShell:
+### Reproduce the benchmark
+
+Build the app, then run the isolated benchmark from PowerShell:
 
 ```powershell
 .\scripts\measure_memory.ps1
 ```
 
-The benchmark uses temporary AppData, LocalAppData, and Temp directories, disables
-benchmark-instance hotkeys by default, and removes its temporary data when it
-finishes. It reports private working set as the primary measure, plus private bytes,
-total working set, CPU time, page faults, thread count, and handle count.
+The standard run performs five launches, waits 15 seconds after each launch, and samples once per second for 60 seconds. It uses temporary AppData, LocalAppData, and Temp directories, disables benchmark-instance hotkeys, and removes its temporary profile when finished.
 
-To measure another build without replacing the normal Release executable:
+To test another binary or retain JSON output:
 
 ```powershell
-.\scripts\measure_memory.ps1 -ExecutablePath .\tmp\candidate\DotHiderNative.exe
+.\scripts\measure_memory.ps1 `
+  -ExecutablePath .\path\to\DotHiderNative.exe `
+  -OutputPath .\out\memory-report.json
 ```
+
+## Diagnostics
+
+Choose **Show Diagnostics Snapshot** from the tray menu to see:
+
+- working set and private bytes
+- handle count
+- physical overlay position and size
+- saved inset values
+- calibration state
+
+For continuous diagnostic logging, set `enableMemoryLogging=true` and reload settings. The log is stored beside the active settings file as `diagnostics.log`.
+
+Typical locations:
+
+```powershell
+Get-Content "$env:APPDATA\DotHiderNative\diagnostics.log"
+Get-Content "$env:TEMP\DotHiderNative\diagnostics.log"
+Get-Content "$env:LOCALAPPDATA\DotHiderNative\diagnostics.log"
+```
+
+## Troubleshooting
+
+- **No tray icon:** check the notification-area overflow menu and make sure another copy is not already running.
+- **Overlay never appears:** enable calibration mode. If it appears then, confirm `targetProcesses`, `visibilityMode`, the selected monitor, and whether Jump Desktop is truly full screen.
+- **Overlay appears on the wrong monitor:** set `monitor` to the intended device name and reload settings.
+- **Overlay is the wrong size:** keep logical scaling enabled and adjust `width`/`height`, or disable it for exact pixels.
+- **Hotkeys do not respond:** confirm `enableHotkeys=true`, enable calibration for movement keys, and check whether another app owns the shortcut.
+- **Settings edits seem ignored:** save the file and choose **Reload Settings** or press `Ctrl+Alt+R`.
+- **A display change leaves stale placement:** reload settings; if the issue persists, exit and restart the app.
+
+## Build from source
+
+Install Visual Studio 2022 Build Tools with the Desktop development with C++ workload, then run:
+
+```powershell
+.\build.ps1 -Configuration Release -Platform x64
+```
+
+The build script locates MSBuild through `vswhere` when available. The output is `x64\Release\DotHiderNative.exe`.
+
+## License
+
+DotHiderNative is available under the [MIT License](LICENSE).
