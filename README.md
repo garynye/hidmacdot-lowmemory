@@ -2,6 +2,8 @@
 
 DotHiderNative is a tiny native Windows utility that covers the orange privacy dot shown by Jump Desktop with a configurable topmost overlay. It runs in the notification area, watches for Jump Desktop full-screen windows, and uses no bundled framework or background service.
 
+Current source/package version: **1.0.1**. The download links below describe the last published release, v1.0.0.
+
 ## Requirements
 
 - Windows 10 or Windows 11, x64
@@ -101,6 +103,8 @@ Device names are more explicit than indexes, whose enumeration order may change.
 Set `scaleLogicalSettings=false` when you want `width`, `height`, and inset values to mean exact physical pixels instead of DPI-scaled logical units. Recalibrate after changing this setting.
 
 DotHiderNative automatically repositions itself when Windows reports a resolution, monitor, or per-monitor DPI change.
+
+It also checks current monitor bounds on the existing two-second visibility timer and restores the overlay's topmost position without taking focus. Display and wake notifications refresh DPI immediately. Every five minutes, the same timer forces a monitor/DPI and overlay refresh in place. There is no process restart, additional timer, worker thread, or background service. Settings and calibration remain intact.
 
 ## Settings file
 
@@ -216,6 +220,7 @@ Choose **Show Diagnostics Snapshot** from the tray menu to see:
 - physical overlay position and size
 - saved inset values
 - calibration state
+- expected and actual visibility, selected monitor bounds and DPI, and the last overlay recovery error
 
 For continuous diagnostic logging, set `enableMemoryLogging=true` and reload settings. The log is stored beside the active settings file as `diagnostics.log`.
 
@@ -235,7 +240,7 @@ Get-Content "$env:LOCALAPPDATA\DotHiderNative\diagnostics.log"
 - **Overlay is the wrong size:** keep logical scaling enabled and adjust `width`/`height`, or disable it for exact pixels.
 - **Hotkeys do not respond:** confirm `enableHotkeys=true`, enable calibration for movement keys, and check whether another app owns the shortcut.
 - **Settings edits seem ignored:** save the file and choose **Reload Settings** or press `Ctrl+Alt+R`.
-- **A display change leaves stale placement:** reload settings; if the issue persists, exit and restart the app.
+- **A display change leaves stale placement:** allow up to four seconds after the displays settle for automatic recovery. If the problem persists, use **Show Diagnostics Snapshot** before **Reload Settings** and retain the monitor, DPI, visibility, and recovery-error values.
 
 ## Build from source
 
@@ -246,6 +251,35 @@ Install Visual Studio 2022 Build Tools with the Desktop development with C++ wor
 ```
 
 The build script locates MSBuild through `vswhere` when available. The output is `x64\Release\DotHiderNative.exe`.
+
+To build alongside a running copy without replacing it:
+
+```powershell
+.\build.ps1 -Configuration Release -Platform x64 -OutputDirectory .\out\recovery-candidate
+```
+
+### Recovery regression tests
+
+The native tests use invisible synthetic full-screen windows and a separate app instance with temporary settings and disabled hotkeys. Each test instance uses a unique target process name so concurrent runs cannot affect its visibility checks. Your existing app and settings are left alone.
+
+```powershell
+.\scripts\test_recovery.ps1 -ExecutablePath .\out\recovery-candidate\DotHiderNative.exe
+.\scripts\test_recovery.ps1 -ExecutablePath .\out\recovery-candidate\DotHiderNative.exe -SoakSeconds 360
+```
+
+Tests cover competing topmost windows, hidden/displaced overlays, intentional hiding, target reconnection, focus preservation, shape changes, repaint avoidance, invalid-window errors, the five-minute deadline, and handle/GDI stability. The soak crosses the real five-minute refresh boundary. Use `-SoakSeconds 7200` for a two-hour synthetic soak; actual monitor removal, scaling changes, sleep/wake, and Jump Desktop reconnects still need manual verification.
+
+For an isolated always-visible memory/CPU benchmark:
+
+```powershell
+.\scripts\measure_memory.ps1 -ExecutablePath .\out\recovery-candidate\DotHiderNative.exe -VisibilityMode Always -OutputPath .\out\memory-always.json
+```
+
+Package the validated binary with the current source/package version:
+
+```powershell
+.\scripts\package_release.ps1 -Version 1.0.1 -ExecutablePath .\out\recovery-candidate\DotHiderNative.exe
+```
 
 ## License
 

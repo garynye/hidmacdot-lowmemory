@@ -10,7 +10,10 @@ param(
     [ValidateRange(100, 10000)]
     [int]$SampleIntervalMilliseconds = 1000,
     [switch]$AllowHotkeys,
-    [string]$OutputPath
+    [string]$OutputPath,
+    [ValidateSet('TargetFullscreenWindow', 'ForegroundTarget', 'Always')]
+    [string]$VisibilityMode = 'TargetFullscreenWindow',
+    [string]$TargetProcesses = 'JumpDesktop,JumpClient'
 )
 
 $ErrorActionPreference = "Stop"
@@ -268,8 +271,8 @@ rightInset=2
 scaleLogicalSettings=true
 
 [Behavior]
-targetProcesses=JumpDesktop,JumpClient
-visibilityMode=TargetFullscreenWindow
+targetProcesses=$TargetProcesses
+visibilityMode=$VisibilityMode
 fullscreenTolerancePx=8
 calibrationMode=false
 persistCalibrationMode=false
@@ -377,6 +380,8 @@ try {
         SampleSeconds = $SampleSeconds
         SampleIntervalMilliseconds = $SampleIntervalMilliseconds
         HotkeysEnabled = [bool]$AllowHotkeys
+        VisibilityMode = $VisibilityMode
+        TargetProcesses = $TargetProcesses
         Aggregate = [PSCustomObject]@{
             MedianPrivateWorkingSetKiB = Get-Percentile -Values $aggregatePrivateWorkingSet -Percentile 0.50
             P95PrivateWorkingSetKiB = Get-Percentile -Values $aggregatePrivateWorkingSet -Percentile 0.95

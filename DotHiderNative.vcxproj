@@ -87,12 +87,14 @@
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\memory_optimizer.cpp" />
+    <ClCompile Include="src\overlay_recovery.cpp" />
     <ClCompile Include="src\tray_icon.cpp" />
     <ClCompile Include="src\windows_input.cpp" />
     <ClCompile Include="src\windows_shell.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\memory_optimizer.h" />
+    <ClInclude Include="src\overlay_recovery.h" />
     <ClInclude Include="src\resource.h" />
     <ClInclude Include="src\tray_icon.h" />
     <ClInclude Include="src\windows_input.h" />

@@ -1,6 +1,8 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Platform = "x64"
+    [string]$Platform = "x64",
+    [string]$OutputDirectory,
+    [string]$ProjectPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,7 +36,7 @@ function Resolve-MsBuild {
     return $msbuild
 }
 
-$project = Join-Path $PSScriptRoot "DotHiderNative.vcxproj"
+$project = if ($ProjectPath) { [IO.Path]::GetFullPath($ProjectPath) } else { Join-Path $PSScriptRoot "DotHiderNative.vcxproj" }
 if (-not (Test-Path $project)) {
     throw "Project file not found: $project"
 }
@@ -48,4 +50,12 @@ if ($null -ne $normalizedPath) {
 }
 
 $msbuild = Resolve-MsBuild
-& $msbuild $project /m /p:Configuration=$Configuration /p:Platform=$Platform
+$buildArguments = @($project, '/m', "/p:Configuration=$Configuration", "/p:Platform=$Platform")
+if ($OutputDirectory) {
+    $resolvedOutput = [IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\') + '\'
+    $buildArguments += "/p:OutDir=$resolvedOutput"
+}
+& $msbuild @buildArguments
+if ($LASTEXITCODE -ne 0) {
+    throw "MSBuild failed with exit code $LASTEXITCODE."
+}

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "memory_optimizer.h"
+#include "overlay_recovery.h"
 #include "tray_icon.h"
 #include "windows_input.h"
 #include "windows_shell.h"
@@ -110,7 +111,9 @@ Geometry g_geometry;
 MonitorInfo g_activeMonitor;
 UINT g_dpiX = 96;
 UINT g_dpiY = 96;
-HRGN g_windowRgn = nullptr;
+overlay_recovery::State g_recovery;
+bool g_monitorAvailable = false;
+bool g_forceRefresh = true;
 
 SIZE_T GetCurrentProcessHandleCount() {
     DWORD handleCount = 0;
@@ -490,21 +493,6 @@ int ScaleForDpi(int logicalValue) {
     return static_cast<int>(std::llround(scaled));
 }
 
-BOOL CALLBACK EnumerateMonitors(HMONITOR hMon, HDC, LPRECT, LPARAM data) {
-    auto* monitors = reinterpret_cast<std::vector<MonitorInfo>*>(data);
-    if (!monitors) return TRUE;
-    MONITORINFOEXW info;
-    info.cbSize = sizeof(info);
-    if (!GetMonitorInfoW(hMon, reinterpret_cast<MONITORINFO*>(&info))) return TRUE;
-    MonitorInfo m;
-    m.handle = hMon;
-    m.bounds = info.rcMonitor;
-    m.primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
-    m.deviceName = info.szDevice;
-    monitors->push_back(m);
-    return TRUE;
-}
-
 bool IsInteger(std::wstring value, int& out) {
     if (value.empty()) return false;
     try {
@@ -543,55 +531,68 @@ bool QueryMonitorDpi(HMONITOR monitor, UINT& dpiX, UINT& dpiY) {
 }
 
 bool ResolveMonitor(const std::wstring& selector, MonitorInfo& out) {
-    std::vector<MonitorInfo> monitors;
-    EnumDisplayMonitors(nullptr, nullptr, EnumerateMonitors, reinterpret_cast<LPARAM>(&monitors));
-    if (monitors.empty()) return false;
-
     const std::wstring sel = ToLower(Trim(selector));
-    std::wstring primary = L"primary";
-
-    for (const auto& monitor : monitors) {
-        if (monitor.primary && sel == primary) {
-            out = monitor;
-            return true;
-        }
-    }
-
     int index = -1;
-    if (IsInteger(sel, index)) {
-        if (index >= 0 && index < static_cast<int>(monitors.size())) {
-            out = monitors[static_cast<size_t>(index)];
-            return true;
-        }
+    // Names such as "primary" must not throw std::stoi exceptions on each tick.
+    // The original primary path returned before attempting numeric conversion.
+    if (!sel.empty() && (iswdigit(sel.front()) || sel.front() == L'+' || sel.front() == L'-')) {
+        IsInteger(sel, index);
     }
-
-    for (const auto& monitor : monitors) {
-        if (ToLower(monitor.deviceName) == sel) {
-            out = monitor;
-            return true;
+    struct Search {
+        const wchar_t* selector;
+        int index;
+        int current = 0;
+        HMONITOR selected = nullptr;
+        HMONITOR fallback = nullptr;
+    } search{sel.c_str(), index};
+    // Resolve on the stack instead of allocating a vector and device strings
+    // every two seconds. Preserve the existing primary-monitor fallback.
+    auto callback = [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
+        auto& state = *reinterpret_cast<Search*>(data);
+        MONITORINFOEXW info{};
+        info.cbSize = sizeof(info);
+        if (!GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO*>(&info))) return TRUE;
+        const bool primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
+        if (!state.fallback || primary) state.fallback = monitor;
+        if ((_wcsicmp(state.selector, L"primary") == 0 && primary) ||
+            state.index == state.current || _wcsicmp(info.szDevice, state.selector) == 0) {
+            state.selected = monitor;
+            return FALSE;
         }
-    }
-
-    for (const auto& monitor : monitors) {
-        if (monitor.primary) {
-            out = monitor;
-            return true;
-        }
-    }
-    out = monitors[0];
+        ++state.current;
+        return TRUE;
+    };
+    EnumDisplayMonitors(nullptr, nullptr, callback, reinterpret_cast<LPARAM>(&search));
+    const HMONITOR monitor = search.selected ? search.selected : search.fallback;
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (!monitor || !GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO*>(&info))) return false;
+    out.handle = monitor;
+    out.bounds = info.rcMonitor;
+    out.primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
+    out.deviceName = info.szDevice;
     return true;
 }
 
-void UpdateMonitorAndScale() {
-    if (!ResolveMonitor(g_settings.monitor, g_activeMonitor)) return;
-    g_dpiX = 96;
-    g_dpiY = 96;
-    if (!QueryMonitorDpi(g_activeMonitor.handle, g_dpiX, g_dpiY)) {
-        HDC dc = GetDC(nullptr);
-        if (dc) {
-            g_dpiX = GetDeviceCaps(dc, LOGPIXELSX);
-            g_dpiY = GetDeviceCaps(dc, LOGPIXELSY);
-            ReleaseDC(nullptr, dc);
+void UpdateMonitorAndScale(bool forceDpi) {
+    const HMONITOR previousMonitor = g_activeMonitor.handle;
+    const RECT previousBounds = g_activeMonitor.bounds;
+    g_monitorAvailable = ResolveMonitor(g_settings.monitor, g_activeMonitor);
+    if (!g_monitorAvailable) return;
+    // The DPI helper loads/unloads Shcore on systems where it isn't resident.
+    // Query on topology changes, notifications, and the five-minute refresh,
+    // rather than causing DLL page faults on every visibility tick.
+    if (forceDpi || previousMonitor != g_activeMonitor.handle ||
+        !EqualRect(&previousBounds, &g_activeMonitor.bounds)) {
+        g_dpiX = 96;
+        g_dpiY = 96;
+        if (!QueryMonitorDpi(g_activeMonitor.handle, g_dpiX, g_dpiY)) {
+            HDC dc = GetDC(nullptr);
+            if (dc) {
+                g_dpiX = GetDeviceCaps(dc, LOGPIXELSX);
+                g_dpiY = GetDeviceCaps(dc, LOGPIXELSY);
+                ReleaseDC(nullptr, dc);
+            }
         }
     }
     if (g_dpiX == 0) g_dpiX = 96;
@@ -760,6 +761,12 @@ bool IsTargetForegroundProcess() {
 void ShowOrHideOverlay(bool show);
 
 void RefreshVisibilityState() {
+    // Reload Settings used to be the only reliable way to repair stale geometry.
+    // Reuse the visibility timer so monitor changes cannot leave detection stale.
+    const bool fullRefresh = g_forceRefresh ||
+        overlay_recovery::FullRefreshDue(g_recovery, GetTickCount64());
+    UpdateMonitorAndScale(fullRefresh);
+    g_forceRefresh = fullRefresh;
     bool targetMatch = false;
 
     if (g_settings.calibrationMode) {
@@ -777,85 +784,34 @@ void RefreshVisibilityState() {
          targetMatch ? L"true" : L"false",
          g_settings.calibrationMode ? L"true" : L"false");
 
-    ShowOrHideOverlay(targetMatch);
-}
-
-void ApplyOverlayShape() {
-    if (!g_hwnd) return;
-    if (g_windowRgn) {
-        DeleteObject(g_windowRgn);
-        g_windowRgn = nullptr;
-    }
-    if (g_geometry.physicalWidth <= 0 || g_geometry.physicalHeight <= 0) return;
-
-    const std::wstring shape = ToLower(g_settings.shape);
-    if (shape == L"rectangle") {
-        SetWindowRgn(g_hwnd, nullptr, TRUE);
-        return;
-    }
-
-    // SetWindowRgn is used so the overlay remains click-through and only the desired
-    // shape area is visible/active.
-    HRGN region = nullptr;
-    if (shape == L"roundedrectangle" || shape == L"rounded_rectangle" || shape == L"roundrectangle") {
-        const int radiusX = (g_geometry.physicalWidth / 4 > 1) ? (g_geometry.physicalWidth / 4) : 1;
-        const int radiusY = (g_geometry.physicalHeight / 4 > 1) ? (g_geometry.physicalHeight / 4) : 1;
-        region = CreateRoundRectRgn(0, 0, g_geometry.physicalWidth, g_geometry.physicalHeight, radiusX, radiusY);
-    } else {
-        region = CreateEllipticRgn(0, 0, g_geometry.physicalWidth, g_geometry.physicalHeight);
-    }
-
-    if (!region) return;
-
-    if (SetWindowRgn(g_hwnd, region, TRUE)) {
-        g_windowRgn = nullptr;
-    } else {
-        DeleteObject(region);
-        g_windowRgn = nullptr;
-        SetWindowRgn(g_hwnd, nullptr, TRUE);
-    }
-}
-
-void ApplyOverlayPlacement() {
-    if (!g_hwnd) return;
-    ApplyOverlayShape();
-    SetWindowPos(g_hwnd, HWND_TOPMOST,
-                 g_geometry.x, g_geometry.y,
-                 g_geometry.physicalWidth, g_geometry.physicalHeight,
-                 SWP_NOACTIVATE | SWP_NOZORDER);
-    InvalidateRect(g_hwnd, nullptr, FALSE);
-    if (IsWindowVisible(g_hwnd)) {
-        UpdateWindow(g_hwnd);
-    }
+    ShowOrHideOverlay(targetMatch && g_monitorAvailable);
 }
 
 void ShowOrHideOverlay(bool show) {
     if (!g_hwnd) return;
-    bool currentlyVisible = IsWindowVisible(g_hwnd) != FALSE;
-    if (show == currentlyVisible) {
-        if (show) {
-            ApplyOverlayPlacement();
-        }
-        return;
-    }
-
-    if (show) {
-        ApplyOverlayPlacement();
-        ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
-        Logf(L"overlay show");
-        LogMemorySnapshot(L"overlay show");
+    const bool wasVisible = IsWindowVisible(g_hwnd) != FALSE;
+    const std::wstring name = ToLower(g_settings.shape);
+    const auto shape = name == L"rectangle" ? overlay_recovery::Shape::Rectangle :
+        (name == L"roundedrectangle" || name == L"rounded_rectangle" || name == L"roundrectangle") ?
+        overlay_recovery::Shape::RoundedRectangle : overlay_recovery::Shape::Circle;
+    const RECT bounds{g_geometry.x, g_geometry.y,
+        g_geometry.x + g_geometry.physicalWidth, g_geometry.y + g_geometry.physicalHeight};
+    if (overlay_recovery::Apply(g_hwnd, g_recovery, bounds, shape,
+                                g_settings.color, show, g_forceRefresh)) {
+        g_forceRefresh = false;
     } else {
-        ShowWindow(g_hwnd, SW_HIDE);
-        Logf(L"overlay hide");
-        LogMemorySnapshot(L"overlay hide");
+        Logf(L"overlay recovery failed error=%lu", g_recovery.lastError);
+    }
+    if (wasVisible != (IsWindowVisible(g_hwnd) != FALSE)) {
+        Logf(L"overlay %s", show ? L"show" : L"hide");
+        LogMemorySnapshot(L"visibility transition");
     }
 }
 
 void RegisterOrUpdateHotkeys();
 
 void PersistAndReposition() {
-    UpdateMonitorAndScale();
-    ApplyOverlayPlacement();
+    g_forceRefresh = true;
     RefreshVisibilityState();
 }
 
@@ -961,13 +917,23 @@ void ShowDiagnosticsSnapshot() {
                L"Overlay: x=%d y=%d w=%d h=%d\r\n"
                L"topInset=%d\r\n"
                L"rightInset=%d\r\n"
-               L"calibrationMode=%s",
+               L"calibrationMode=%s\r\n"
+               L"Expected/actual visible: %s/%s\r\n"
+               L"Monitor: %s available=%s\r\n"
+               L"Bounds: %ld,%ld to %ld,%ld DPI: %u,%u\r\n"
+               L"Last recovery error: %lu",
                workingSet / (1024.0 * 1024.0),
                privateBytes / (1024.0 * 1024.0),
                static_cast<unsigned long long>(handleCount),
                g_geometry.x, g_geometry.y, g_geometry.physicalWidth, g_geometry.physicalHeight,
                g_settings.topInset, g_settings.rightInset,
-               g_settings.calibrationMode ? L"true" : L"false");
+               g_settings.calibrationMode ? L"true" : L"false",
+               g_recovery.expectedVisible ? L"true" : L"false",
+               IsWindowVisible(g_hwnd) ? L"true" : L"false",
+               g_activeMonitor.deviceName.c_str(), g_monitorAvailable ? L"true" : L"false",
+               g_activeMonitor.bounds.left, g_activeMonitor.bounds.top,
+               g_activeMonitor.bounds.right, g_activeMonitor.bounds.bottom,
+               g_dpiX, g_dpiY, g_recovery.lastError);
 
     MessageBoxW(g_hwnd, text, L"DotHiderNative Diagnostics", MB_OK | MB_ICONINFORMATION);
     Logf(L"diagnostics snapshot shown");
@@ -977,7 +943,6 @@ void ShowDiagnosticsSnapshot() {
 void LoadAndApplySettings() {
     LoadSettings();
     Logf(L"settings load");
-    UpdateMonitorAndScale();
     RegisterOrUpdateHotkeys();
     PersistAndReposition();
 }
@@ -1060,6 +1025,11 @@ LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         case WM_DPICHANGED:
             PersistAndReposition();
             return 0;
+        case WM_POWERBROADCAST:
+            if (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND) {
+                PersistAndReposition();
+            }
+            return TRUE;
         case WM_TIMER:
             if (wParam == kVisibilityRefreshTimerId) {
                 RefreshVisibilityState();
@@ -1193,8 +1163,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
         MessageBoxW(nullptr, L"CreateWindowExW failed", L"DotHiderNative", MB_OK | MB_ICONERROR);
         return 1;
     }
-    UpdateMonitorAndScale();
-    ApplyOverlayPlacement();
+    // Resolve DPI and place the hidden overlay before tray/hook allocation,
+    // retaining the compact startup allocation order of the original app.
+    UpdateMonitorAndScale(true);
+    ShowOrHideOverlay(false);
     Logf(L"overlay created");
 
     CreateTrayIcon();
