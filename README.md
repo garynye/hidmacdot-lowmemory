@@ -2,7 +2,7 @@
 
 DotHiderNative is a tiny native Windows utility that covers the orange privacy dot shown by Jump Desktop with a configurable topmost overlay. It runs in the notification area, watches for Jump Desktop full-screen windows, and uses no bundled framework or background service.
 
-Current source/package version: **1.0.1**. The download links below describe the last published release, v1.0.0.
+Current source/package version: **1.0.1**.
 
 ## Requirements
 
@@ -16,8 +16,8 @@ The published executable is currently unsigned. Windows SmartScreen may therefor
 
 Open the [latest GitHub release](https://github.com/garynye/hidmacdot-lowmemory/releases/latest) and choose either:
 
-- `DotHiderNative-v1.0.0-windows-x64.exe` for the smallest direct download, or
-- `DotHiderNative-v1.0.0-windows-x64.zip` if you also want this README and the license in one package.
+- `DotHiderNative-v1.0.1-windows-x64.exe` for the smallest direct download, or
+- `DotHiderNative-v1.0.1-windows-x64.zip` if you also want this README and the license in one package.
 
 For the ZIP package, extract it before running the app. Put `DotHiderNative.exe` in a permanent folder such as `%LOCALAPPDATA%\Programs\DotHiderNative`; the app does not need to live under `Program Files`.
 

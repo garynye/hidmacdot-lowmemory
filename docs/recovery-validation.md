@@ -117,6 +117,6 @@ through its tray menu, then launch
 
 Physical display changes, actual sleep/wake, visual flicker, and a two-hour real
 Jump Desktop session were not automated. A two-hour synthetic soak is available
-with `-SoakSeconds 7200` but was not run. No GitHub release was published; v1.0.1
-is packaged locally. The original executable is retained in
+with `-SoakSeconds 7200` but was not run. During validation, v1.0.1 was packaged
+locally before GitHub publication. The original executable is retained in
 `out\recovery-baseline\DotHiderNative.exe` for rollback.
